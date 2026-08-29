@@ -30,11 +30,15 @@ jobs:
           #!/bin/bash
           exec "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang" "$@"
           EOF
+          cat > $HOME/ndk-wrapper/aarch64-linux-android-clang << 'EOF'
+          #!/bin/bash
+          exec "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang" "$@"
+          EOF
           cat > $HOME/ndk-wrapper/aarch64-linux-android-ar << 'EOF'
           #!/bin/bash
           exec "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" "$@"
           EOF
-          chmod +x $HOME/ndk-wrapper/clang $HOME/ndk-wrapper/aarch64-linux-android-ar
+          chmod +x $HOME/ndk-wrapper/clang $HOME/ndk-wrapper/aarch64-linux-android-clang $HOME/ndk-wrapper/aarch64-linux-android-ar
           echo "$HOME/ndk-wrapper" >> $GITHUB_PATH
 
       - name: Build
@@ -43,6 +47,7 @@ jobs:
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: /home/runner/work/Tcheran/Tcheran/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang
         run: |
           which clang
+          which aarch64-linux-android-clang
           which aarch64-linux-android-ar
           cargo rustc --manifest-path ./engine/Cargo.toml --bin tcheran --release --target aarch64-linux-android -- --emit link=tcheran
 
