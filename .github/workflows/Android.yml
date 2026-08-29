@@ -1,0 +1,67 @@
+name: Tcheran
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ARM64 Android target
+        run: |
+          rustup target add aarch64-linux-android
+
+      - name: Install Android NDK
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+          unzip -q android-ndk-r26d-linux.zip
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26d" >> $GITHUB_ENV
+
+      - name: Create clang and ar wrappers for Android target
+        run: |
+          mkdir -p $HOME/ndk-wrapper
+          cat > $HOME/ndk-wrapper/clang << 'EOF'
+          #!/bin/bash
+          exec "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang" "$@"
+          EOF
+          cat > $HOME/ndk-wrapper/aarch64-linux-android-ar << 'EOF'
+          #!/bin/bash
+          exec "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" "$@"
+          EOF
+          chmod +x $HOME/ndk-wrapper/clang $HOME/ndk-wrapper/aarch64-linux-android-ar
+          echo "$HOME/ndk-wrapper" >> $GITHUB_PATH
+
+      - name: Build
+        env:
+          RUSTFLAGS: "-C target-feature=+neon,+dotprod"
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: /home/runner/work/Tcheran/Tcheran/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang
+        run: |
+          which clang
+          which aarch64-linux-android-ar
+          cargo rustc --manifest-path ./engine/Cargo.toml --bin tcheran --release --target aarch64-linux-android -- --emit link=tcheran
+
+      - name: List build output
+        run: |
+          find . -maxdepth 1 -type f -executable
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tcheran-android-arm64
+          path: tcheran
+
+      - name: Create prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-build-${{ github.run_number }}
+          name: Tcheran Build ${{ github.run_number }}
+          prerelease: true
+          files: tcheran
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
