@@ -44,8 +44,8 @@ jobs:
       - name: Build
         env:
           RUSTFLAGS: "-C target-feature=+neon,+dotprod"
-          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: /home/runner/work/Tcheran/Tcheran/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang
         run: |
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang"
           which clang
           which aarch64-linux-android-clang
           which aarch64-linux-android-ar
