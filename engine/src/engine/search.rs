@@ -240,7 +240,7 @@ pub fn iterative_deepening(
         let previous_eval = result.as_ref().map(|r| r.score);
 
         let mut pv = PrincipalVariation::new();
-        let eval = aspiration_search(game, depth, previous_eval, &mut pv, ctx);
+        let score = aspiration_search(game, depth, previous_eval, &mut pv, ctx);
 
         if ctx.stopped() {
             ctx.was_hard_stopped = true;
@@ -258,7 +258,7 @@ pub fn iterative_deepening(
             mv: new_best_move,
             depth: depth.as_u8(),
             seldepth: ctx.max_depth_reached,
-            score: eval,
+            score,
             pv: pv.clone(),
             stats: SearchStats::from_ctx(ctx),
         };
@@ -289,9 +289,8 @@ pub fn aspiration_search(
     let mut window = if depth < aspiration_min_depth() || eval.is_some_and(Eval::is_decisive) {
         ScoreWindow::new(Eval::MIN, Eval::MAX)
     } else {
-        let eval =
-            eval.expect("Aspiration search should have an evaluation after it reaches min depth");
-        ScoreWindow::new(CLAMP_ALPHA(eval - width), CLAMP_BETA(eval + width))
+        let score = eval.expect("Aspiration search should have a score after it reaches min depth");
+        ScoreWindow::new(CLAMP_ALPHA(score - width), CLAMP_BETA(score + width))
     };
 
     let mut reduction = 0;
@@ -301,23 +300,23 @@ pub fn aspiration_search(
         // but would allow dropping directly into quiescence which we don't want.
         let search_depth = (depth - reduction).max(Depth::new(1));
 
-        let eval = negamax(game, window, search_depth, 0, false, pv, ctx);
+        let score = negamax(game, window, search_depth, 0, false, pv, ctx);
 
         if ctx.stopped() {
             return Eval::MIN;
         }
 
-        if eval <= window.alpha {
+        if score <= window.alpha {
             window.beta = (window.alpha + window.beta) / 2;
-            window.alpha = CLAMP_ALPHA(eval - width);
+            window.alpha = CLAMP_ALPHA(score - width);
             width = INCREASE_WIDTH(width);
             reduction = 0;
-        } else if eval >= window.beta {
-            window.beta = CLAMP_BETA(eval + width);
+        } else if score >= window.beta {
+            window.beta = CLAMP_BETA(score + width);
             width = INCREASE_WIDTH(width);
             reduction = (reduction + 1).min(aspiration_max_reduction());
         } else {
-            return eval;
+            return score;
         }
     }
 }
@@ -410,15 +409,12 @@ pub fn negamax(
     };
 
     if let Some(ref tt_entry) = tt_entry {
-        if !is_root && !is_pv && tt_entry.depth >= depth {
-            let tt_score = tt_entry.score;
-
-            match tt_entry.bound {
-                NodeBound::Exact => return tt_score,
-                NodeBound::Upper if tt_score <= s.alpha => return tt_score,
-                NodeBound::Lower if tt_score >= s.beta => return tt_score,
-                _ => {}
-            }
+        if !is_root
+            && !is_pv
+            && tt_entry.depth >= depth
+            && score_is_usable(tt_entry.score, tt_entry.bound, s)
+        {
+            return tt_entry.score;
         }
 
         tt_pv |= tt_entry.was_pv;
@@ -444,10 +440,7 @@ pub fn negamax(
             Wdl::Loss => (Eval::tb_mated_in(plies), NodeBound::Upper),
         };
 
-        if bound == NodeBound::Exact
-            || (bound == NodeBound::Lower && score >= s.beta)
-            || (bound == NodeBound::Upper && score <= s.alpha)
-        {
+        if score_is_usable(score, bound, s) {
             ctx.tt
                 .insert(game.hash, bound, None, score, Eval::NONE, depth, plies, tt_pv);
 
@@ -502,12 +495,7 @@ pub fn negamax(
     if !in_check
         && !in_singular_search
         && let Some(ref tt_entry) = tt_entry
-        && match tt_entry.bound {
-            NodeBound::None => false,
-            NodeBound::Exact => true,
-            NodeBound::Lower => tt_entry.score > eval,
-            NodeBound::Upper => tt_entry.score < eval,
-        }
+        && score_is_usable(tt_entry.score, tt_entry.bound, ScoreWindow::new(eval, eval))
     {
         score_estimate = tt_entry.score;
     }
@@ -977,11 +965,10 @@ pub fn negamax(
         }
     }
 
-    if !(in_singular_search
-        || in_check
-        || best_move.is_some_and(|m| !m.is_quiet())
-        || tt_node_bound == NodeBound::Lower && best_score <= eval
-        || tt_node_bound == NodeBound::Upper && best_score >= eval)
+    if !in_check
+        && !in_singular_search
+        && score_is_usable(best_score, tt_node_bound, ScoreWindow::new(eval, eval))
+        && best_move.is_none_or(Move::is_quiet)
     {
         ctx.tables
             .corrhist
@@ -1055,15 +1042,8 @@ pub fn quiescence(
     let mut tt_pv = is_pv;
 
     if let Some(ref tt_entry) = tt_entry {
-        if !is_pv {
-            let tt_score = tt_entry.score;
-
-            match tt_entry.bound {
-                NodeBound::Exact => return tt_score,
-                NodeBound::Upper if tt_score <= s.alpha => return tt_score,
-                NodeBound::Lower if tt_score >= s.beta => return tt_score,
-                _ => {}
-            }
+        if !is_pv && score_is_usable(tt_entry.score, tt_entry.bound, s) {
+            return tt_entry.score;
         }
 
         tt_pv |= tt_entry.was_pv;
@@ -1197,6 +1177,18 @@ pub fn quiescence(
     );
 
     best_score
+}
+
+fn score_is_usable(score: Eval, bound: NodeBound, s: ScoreWindow) -> bool {
+    match bound {
+        NodeBound::None => false,
+        // We know the exact score, so no use searching further
+        NodeBound::Exact => true,
+        // The score is a lower bound and is greater than beta, so the true score will also beat beta - we fail high
+        NodeBound::Lower => score >= s.beta,
+        // The score is an upper bound and is less than alpha, so the true score will also not beat alpha - we fail low
+        NodeBound::Upper => score <= s.alpha,
+    }
 }
 
 fn correct_eval(game: &Game, raw_eval: Eval, ctx: &SearchContext<'_>, plies: u8) -> Eval {
