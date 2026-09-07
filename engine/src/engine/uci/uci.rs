@@ -294,7 +294,7 @@ impl Uci {
 
                     time_control = TimeControl::Nodes {
                         soft: Some(nodes),
-                        hard: options.soft_notes_hard_factor.map(|f| f as u64 * nodes),
+                        hard: options.soft_nodes_hard_factor.map(|f| f as u64 * nodes),
                     }
                 }
 
@@ -674,7 +674,7 @@ pub fn uci_options() -> Vec<UciOption> {
                 value = None;
             }
 
-            refs.options.soft_notes_hard_factor = value;
+            refs.options.soft_nodes_hard_factor = value;
         })
         .with_bounds(0, 128)
         .default(0)

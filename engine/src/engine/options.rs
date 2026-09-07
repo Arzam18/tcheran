@@ -29,7 +29,7 @@ pub struct EngineOptions {
     pub syzygy_path: Option<String>,
 
     pub soft_nodes: bool,
-    pub soft_notes_hard_factor: Option<usize>,
+    pub soft_nodes_hard_factor: Option<usize>,
 }
 
 impl EngineOptions {
@@ -43,6 +43,6 @@ impl EngineOptions {
         syzygy_path: defaults::SYZYGY_PATH,
 
         soft_nodes: defaults::SOFT_NODES,
-        soft_notes_hard_factor: defaults::SOFT_NODES_HARD_FACTOR,
+        soft_nodes_hard_factor: defaults::SOFT_NODES_HARD_FACTOR,
     };
 }
