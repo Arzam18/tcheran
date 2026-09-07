@@ -28,7 +28,7 @@ pub mod stats {
 
     pub fn write_activation_counts() {
         use std::io::Write;
-        let mut file = std::fs::File::create("activations.txt").unwrap();
+        let mut file = std::fs::File::create("etc/activations.txt").unwrap();
 
         let counts: Vec<String> = L0_ACTIVATIONS
             .iter()

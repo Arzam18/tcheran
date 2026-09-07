@@ -1,5 +1,3 @@
 /target
-/datagen
-
-*.nnue
-activations.txt
+/data
+/etc
