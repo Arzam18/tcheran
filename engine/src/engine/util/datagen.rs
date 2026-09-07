@@ -4,7 +4,7 @@ use crate::{
     chess::prelude::*,
     engine::{
         eval::wdl,
-        search::{NullReporter, PersistentState, TimeControl, st_search},
+        search::{NullReporter, PersistentState, ThreadData, TimeControl, st_search},
         util::log,
     },
 };
@@ -57,7 +57,12 @@ fn random_starting_position(rand: &mut impl Rng, dfrc: bool) -> Result<Game, ()>
     Ok(game)
 }
 
-fn acceptable_starting_position(rand: &mut impl Rng, dfrc: bool) -> Game {
+fn acceptable_starting_position(
+    rand: &mut impl Rng,
+    dfrc: bool,
+    state: &mut PersistentState,
+    td: &mut ThreadData,
+) -> Game {
     const UNBALANCED_STARTING_EVAL: i32 = 1000;
 
     loop {
@@ -69,7 +74,8 @@ fn acceptable_starting_position(rand: &mut impl Rng, dfrc: bool) -> Game {
         // Do a quick search to ensure that we haven't landed in a completely broken (won/lost) position.
         let result = st_search(
             &game,
-            &PersistentState::new(4),
+            state,
+            td,
             TimeControl::Nodes {
                 soft: Some(20000),
                 hard: Some(20000 * 8),
@@ -97,8 +103,11 @@ pub fn generate_random_starting_positions(
 
     let mut games = Vec::new();
 
+    let mut state = PersistentState::new(16);
+    let mut td = ThreadData::new(0);
+
     for _ in 0..n {
-        let game = acceptable_starting_position(&mut rand, dfrc);
+        let game = acceptable_starting_position(&mut rand, dfrc, &mut state, &mut td);
         games.push(game);
     }
 
