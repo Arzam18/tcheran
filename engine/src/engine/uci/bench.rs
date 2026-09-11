@@ -11,7 +11,7 @@ use crate::{
     chess::prelude::*,
     engine::{
         search,
-        search::{PersistentState, Reporter, SearchResult, TimeControl, types::Depth},
+        search::{PersistentState, Reporter, SearchResult, ThreadData, TimeControl, types::Depth},
     },
 };
 
@@ -138,6 +138,9 @@ pub fn bench(depth: Option<Depth>) -> (u64, Duration) {
     let mut nodes = 0;
     let mut search_time = Duration::new(0, 0);
 
+    let mut td = ThreadData::new(0);
+    let mut state = PersistentState::new(16);
+
     let depth = depth.unwrap_or(DEFAULT_DEPTH);
 
     for position in POSITIONS {
@@ -145,12 +148,7 @@ pub fn bench(depth: Option<Depth>) -> (u64, Duration) {
         let game = Game::from_valid_fen(position);
         let now = Instant::now();
 
-        search::st_search(
-            &game,
-            &PersistentState::new(16),
-            TimeControl::Depth(depth),
-            &*bench_reporter,
-        );
+        search::st_search(&game, &mut state, &mut td, TimeControl::Depth(depth), &*bench_reporter);
 
         nodes += bench_reporter.nodes();
         search_time += now.elapsed();

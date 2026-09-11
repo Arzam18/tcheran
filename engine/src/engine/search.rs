@@ -125,18 +125,23 @@ fn best_result(results: &SearchResults) -> SearchResult {
 // Simple single-threaded search used by utilities like bench, tests and datagen
 pub fn st_search(
     game: &Game,
-    persistent_state: &PersistentState,
+    persistent_state: &mut PersistentState,
+    thread_data: &mut ThreadData,
     time_control: TimeControl,
     reporter: &dyn Reporter,
 ) -> SearchResult {
+    let options = &EngineOptions::DEFAULT;
+    persistent_state.reset(options);
+    thread_data.reset();
+
     search(
         game,
         persistent_state,
-        &mut ThreadData::new(0),
+        thread_data,
         &SearchResults::new(1),
         time_control,
         &StopControl::new(1),
-        &EngineOptions::DEFAULT,
+        options,
         reporter,
     )
 }

@@ -3,7 +3,8 @@ use crate::{
     engine::{
         eval::Eval,
         search::{
-            NullReporter, PersistentState, SearchResult, TimeControl, st_search, types::Depth,
+            NullReporter, PersistentState, SearchResult, ThreadData, TimeControl, st_search,
+            types::Depth,
         },
     },
 };
@@ -12,8 +13,10 @@ fn test_expected_move(fen: &str, depth: Depth, mv: (Square, Square)) -> SearchRe
     crate::init();
     let game = Game::from_valid_fen(fen);
 
-    let result =
-        st_search(&game, &PersistentState::new(16), TimeControl::Depth(depth), &NullReporter);
+    let mut state = PersistentState::new(16);
+    let mut td = ThreadData::new(0);
+
+    let result = st_search(&game, &mut state, &mut td, TimeControl::Depth(depth), &NullReporter);
 
     assert_eq!((result.mv.from(), result.mv.to()), mv);
     result

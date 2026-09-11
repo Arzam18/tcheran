@@ -142,10 +142,17 @@ pub fn preprocess_network(file: &PathBuf) -> PathBuf {
 
 #[cfg(feature = "syzygy")]
 fn build_fathom() {
-    println!("cargo:rerun-if-changed=src/engine/tablebases/fathom/src");
+    const FATHOM_DIR: &str = "src/engine/tablebases/fathom/src";
 
-    cc::Build::new()
-        .include("src/engine/tablebases/fathom/src")
-        .file("src/engine/tablebases/fathom/src/tbprobe.c")
-        .compile("fathom");
+    println!("cargo:rerun-if-changed={FATHOM_DIR}");
+
+    let mut cc = cc::Build::new();
+    cc.include(FATHOM_DIR);
+    cc.file(format!("{FATHOM_DIR}/tbprobe.c"));
+
+    if env::consts::OS != "windows" {
+        cc.flag("-Wno-unused-but-set-global");
+    }
+
+    cc.compile("fathom");
 }
