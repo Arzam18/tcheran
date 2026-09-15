@@ -27,9 +27,12 @@
 * Null move scores are now verified (0.48 +- 2.39)
 * Give castling moves SEE of 0 instead of always passing (0.02 +- 2.32)
 * Make l0 multi-dimensional (-0.11 +- 2.61)
+* The principal variation is now tracked in quiescence, resolving short mate PVs (-0.14 +- 4.60)
 * Don't apply tacthist bonus for quiet moves (-0.23 +- 2.25)
 * Post-LMR re-search no longer happens if we didn't actually reduce due to clamping (-0.36 +- 2.51)
 * Simplify killer moves (-0.81 +- 2.01)
+
+* Fixed Arc::get_mut crashes triggered by new behaviour in fastchess 1.8.2 (26.22 +- 10.02 against crashing version)
 
 #### Misc
 
@@ -40,6 +43,10 @@
 * Pretty info PVs are now truncated for readability, and checks, promotions and checkmates are colored
 * Exact nodes/time reporting behaviour for hard-stopped searches which was broken accidentally has been restored 
 * Updated to Rust 1.98
+* Errors are now always written to stdout
+* Empty lines on stdin are now treated as no-ops
+* The UCI parser now generates much more specific error messages
+* The pretty SAN output now shows 1/2-1/2 if the PV ends in a drawn game
 
 ## [13.0]
 
