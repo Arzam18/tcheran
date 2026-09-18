@@ -1,8 +1,13 @@
 name: Tcheran
 
 on:
-  push:
   workflow_dispatch:
+    inputs:
+      uci_date:
+        description: "Tcheran UCI version/date (example: 20260918)"
+        required: true
+        default: "20260918"
+        type: string
 
 permissions:
   contents: write
@@ -12,6 +17,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set UCI engine version
+        env:
+          UCI_DATE: ${{ inputs.uci_date }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          uci_date = os.environ["UCI_DATE"]
+
+          path = Path("engine/build.rs")
+          text = path.read_text()
+
+          old = 'let cargo_version = env!("CARGO_PKG_VERSION");'
+          new = f'let cargo_version = "{uci_date}.0";'
+
+          if old not in text:
+              raise SystemExit(
+                  "ERROR: Could not find CARGO_PKG_VERSION line in engine/build.rs."
+              )
+
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+
+          print(f"Modified file: {path}")
+          print(f"Tcheran UCI version: v{uci_date}")
+          PY
+
+          echo "Modified version line:"
+          grep -n 'let cargo_version' engine/build.rs
 
       - name: Install Rust ARM64 Android target
         run: |
