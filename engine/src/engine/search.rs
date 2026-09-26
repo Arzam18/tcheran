@@ -564,7 +564,7 @@ pub fn negamax(
         && !in_check
         && !in_singular_search
         && depth <= razoring_depth()
-        && s.alpha.0.abs() < 2000
+        && s.alpha.abs() < 2000
         && eval + depth * razoring_margin() <= s.alpha
     {
         let qsearch_score = quiescence(game, s.zero_window_around_alpha(), plies, pv, ctx);
@@ -723,11 +723,11 @@ pub fn negamax(
     let mut quiets_tried = MoveList::new();
 
     while let Some(mv) = moves.next(game, ctx.tables, ctx.stack, plies) {
-        legal_moves += 1;
-
         if Some(mv) == excluded_mv {
             continue;
         }
+
+        legal_moves += 1;
 
         ctx.tt.prefetch(game.approx_zobrist_after(mv));
 

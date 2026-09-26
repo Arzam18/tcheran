@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+* Network #25, trained with ~1bn additional 5ksn positions and a sparsity loss term (15.97 +- 7.05)
 * Implement NNZ inference and permute the network for sparsity (12.06 +- 5.91 STC)
 * Use the sum of all conthist scores as the base for updates (9.09 +- 5.17)
 * Added 1-ply continuation correction history (8.23 +- 5.04)
@@ -23,6 +24,7 @@
 * Various SIMD readability improvements (4.71 +- 4.46)
 * Separate legal_moves and moves_tried counters in search (3.64 +- 4.07)
 * Saturating behaviour in LMR is no longer used (2.29 +- 3.43)
+* Don't include the excluded move in legal_moves count (1.47 +- 3.01)
 * Replace repeated bounds logic with score_is_usable fn (1.23 +- 2.46)
 * Only update PV in PV nodes (0.94 +- 2.69)
 * Histories are now updated in singular search (0.88 +- 2.70)

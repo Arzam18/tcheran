@@ -19,6 +19,7 @@ use crate::{
 pub struct TimeStrategy {
     time_control: TimeControl,
     started_at: Instant,
+    params: Params,
 
     soft_stop: Duration,
     hard_stop: Duration,
@@ -31,6 +32,36 @@ pub struct TimeStrategy {
     next_check_at: u64,
 
     control: StopControl,
+}
+
+struct Params {
+    max_time_per_move: f32,
+    increment_to_use: f32,
+    soft_time_multiplier: f32,
+    hard_time_multiplier: f32,
+
+    node_tm_base: f32,
+    node_tm_multiplier: f32,
+    node_tm_min: f32,
+}
+
+fn scale_param(p: u32) -> f32 {
+    p as f32 / 1000.0
+}
+
+impl Params {
+    fn new() -> Self {
+        Self {
+            max_time_per_move: scale_param(max_time_per_move()),
+            increment_to_use: scale_param(increment_to_use()),
+            soft_time_multiplier: scale_param(soft_time_multiplier()),
+            hard_time_multiplier: scale_param(hard_time_multiplier()),
+
+            node_tm_base: scale_param(node_tm_base()),
+            node_tm_multiplier: scale_param(node_tm_multiplier()),
+            node_tm_min: scale_param(node_tm_min()),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -91,6 +122,7 @@ impl TimeStrategy {
         control: StopControl,
         options: &EngineOptions,
     ) -> Self {
+        let params = Params::new();
         let mut started_at = None;
         let mut soft_stop = Duration::default();
         let mut hard_stop = Duration::default();
@@ -116,17 +148,15 @@ impl TimeStrategy {
                     .saturating_sub(options.move_overhead)
                     .max(options.move_overhead);
 
-                let absolute_max = time_remaining.mul_f32(max_time_per_move() as f32 / 100.0);
+                let absolute_max = time_remaining.mul_f32(params.max_time_per_move);
                 let moves_to_go = clocks.moves_to_go.unwrap_or(default_moves_to_go());
 
-                let base_time = absolute_max / moves_to_go
-                    + increment.mul_f32(increment_to_use() as f32 / 100.0);
+                let base_time =
+                    absolute_max / moves_to_go + increment.mul_f32(params.increment_to_use);
 
-                hard_stop = absolute_max.mul_f32(hard_time_multiplier() as f32 / 100.0);
-                soft_stop = std::cmp::min(
-                    base_time.mul_f32(soft_time_multiplier() as f32 / 100.0),
-                    hard_stop,
-                );
+                hard_stop = absolute_max.mul_f32(params.hard_time_multiplier);
+                soft_stop =
+                    std::cmp::min(base_time.mul_f32(params.soft_time_multiplier), hard_stop);
             }
             TimeControl::Nodes { hard, .. } => {
                 if let Some(hard_limit) = hard {
@@ -139,6 +169,7 @@ impl TimeStrategy {
         Self {
             time_control,
             started_at: started_at.unwrap_or_else(Instant::now),
+            params,
 
             soft_stop,
             hard_stop,
@@ -232,19 +263,24 @@ impl TimeStrategy {
         // Compute new scale
         let mut scale = 1.0;
 
-        if depth >= best_move_stability_initial_depth() {
-            scale *= BEST_MOVE_STABILITY_TIME_MULTIPLIERS[self.best_move_stability.min(4)];
-        }
+        let best_move_scale_adjustment = {
+            if depth >= best_move_stability_initial_depth() {
+                BEST_MOVE_STABILITY_TIME_MULTIPLIERS[self.best_move_stability.min(4)]
+            } else {
+                1.0
+            }
+        };
 
         let node_scale_adjustment = {
             let nodes_for_best_move = self.nodes_used[best_move.from()][best_move.to()];
             let fraction_used_for_best_move = nodes_for_best_move as f32 / nodes_visited as f32;
 
-            fraction_used_for_best_move
-                .mul_add(-(node_tm_multiplier() as f32 / 100.0), node_tm_base() as f32 / 100.0)
-                .max(node_tm_min() as f32 / 100.0)
+            (self.params.node_tm_base
+                - (fraction_used_for_best_move * self.params.node_tm_multiplier))
+                .max(self.params.node_tm_min)
         };
 
+        scale *= best_move_scale_adjustment;
         scale *= node_scale_adjustment;
 
         self.scale = scale;
