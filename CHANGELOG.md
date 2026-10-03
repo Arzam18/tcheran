@@ -23,6 +23,7 @@
 * 50-move-rule scaling (9.60 +- 4.48 on fortresses_torch.epd)
 * Various SIMD readability improvements (4.71 +- 4.46)
 * Separate legal_moves and moves_tried counters in search (3.64 +- 4.07)
+* Time management no longer uses max_time_per_move (2.44 +- 3.32)
 * Saturating behaviour in LMR is no longer used (2.29 +- 3.43)
 * Don't include the excluded move in legal_moves count (1.47 +- 3.01)
 * Time management no longer uses max_time_per_move (1.27 +- 3.44)
@@ -41,13 +42,14 @@
 
 #### Misc
 
+* To avoid time losses at TCEC (until a better fix can be made) PV extension in TB root positions is limited to 10 plies
 * We now prefetch transposition table entries on aarch64 (13.79 +- 6.45 VSTC)
 * hugepages are now used for the transposition table on Linux
 * All of the individual search files under search/ are merged into a search.rs
 * SAN checkmate moves are now correctly suffixed with #
 * Pretty info PVs are now truncated for readability, and checks, promotions and checkmates are colored
 * Exact nodes/time reporting behaviour for hard-stopped searches which was broken accidentally has been restored 
-* Updated to Rust 1.98
+* Updated to Rust 1.99
 * Errors are now always written to stdout
 * Empty lines on stdin are now treated as no-ops
 * The UCI parser now generates much more specific error messages
