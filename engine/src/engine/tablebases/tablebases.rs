@@ -2,41 +2,19 @@ use crate::chess::prelude::*;
 #[cfg(feature = "syzygy")]
 use crate::engine::tablebases::bindings;
 
-pub enum Wdl {
-    Win,
-    Draw,
-    Loss,
-}
-
 #[derive(Clone)]
 pub struct Tablebase {
     pub is_enabled: bool,
+    pub n_men: u8,
 }
 
 #[cfg(feature = "syzygy")]
 impl Tablebase {
     pub fn new() -> Self {
-        Self { is_enabled: false }
-    }
-
-    pub fn can_probe(&self, game: &Game) -> bool {
-        if !self.is_enabled {
-            return false;
+        Self {
+            is_enabled: false,
+            n_men: 0,
         }
-
-        if game.board.occupancy().count() > self.n_men() {
-            return false;
-        }
-
-        true
-    }
-
-    pub fn n_men(&self) -> u8 {
-        if !self.is_enabled {
-            return 0;
-        }
-
-        unsafe { bindings::TB_LARGEST as u8 }
     }
 
     pub fn set_paths(&mut self, path: &str) {
@@ -51,14 +29,29 @@ impl Tablebase {
         );
 
         self.is_enabled = true;
+        self.n_men = n_men as u8;
     }
 
-    pub fn wdl(&self, game: &Game) -> Option<Wdl> {
+    pub fn can_probe(&self, game: &Game) -> bool {
+        if !self.is_enabled {
+            return false;
+        }
+
+        if game.board.occupancy().count() > self.n_men {
+            return false;
+        }
+
+        true
+    }
+
+    pub fn n_men(&self) -> u8 {
+        self.n_men
+    }
+
+    pub fn wdl(&self, game: &Game) -> Option<Outcome> {
         use crate::chess::prelude::*;
 
-        if !self.is_enabled {
-            return None;
-        }
+        debug_assert!(self.is_enabled);
 
         unsafe {
             let wdl = bindings::tb_probe_wdl(
@@ -76,7 +69,7 @@ impl Tablebase {
                 game.player == White,
             );
 
-            Self::to_wdl(wdl)
+            Self::to_outcome(wdl)
         }
     }
 
@@ -85,9 +78,7 @@ impl Tablebase {
         use crate::chess::prelude::*;
         use crate::chess::moves::MoveListExt;
 
-        if !self.is_enabled {
-            return None;
-        }
+        debug_assert!(self.is_enabled);
 
         unsafe {
             let result = bindings::tb_probe_root(
@@ -137,8 +128,8 @@ impl Tablebase {
         }
     }
 
-    fn to_wdl(outcome: std::ffi::c_uint) -> Option<Wdl> {
-        use Wdl::*;
+    fn to_outcome(outcome: std::ffi::c_uint) -> Option<Outcome> {
+        use Outcome::*;
 
         match outcome {
             bindings::TB_WIN => Some(Win),
@@ -153,20 +144,23 @@ impl Tablebase {
 #[cfg(not(feature = "syzygy"))]
 impl Tablebase {
     pub fn new() -> Self {
-        Self { is_enabled: false }
+        Self {
+            is_enabled: false,
+            n_men: 0,
+        }
     }
+
+    pub fn set_paths(&mut self, _path: &str) {}
 
     pub fn can_probe(&self, _game: &Game) -> bool {
         false
     }
 
     pub fn n_men(&self) -> u8 {
-        0
+        self.n_men
     }
 
-    pub fn set_paths(&mut self, _path: &str) {}
-
-    pub fn wdl(&self, _game: &Game) -> Option<Wdl> {
+    pub fn wdl(&self, _game: &Game) -> Option<Outcome> {
         None
     }
 
