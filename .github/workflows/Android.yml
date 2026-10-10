@@ -6,7 +6,7 @@ on:
       uci_date:
         description: "Tcheran UCI version/date (example: 20260926)"
         required: true
-        default: "20261003"
+        default: "20261010"
         type: string
 
 permissions:
