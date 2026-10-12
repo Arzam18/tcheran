@@ -21,6 +21,7 @@
 #### Non-regression
 
 * 50-move-rule scaling (9.60 +- 4.48 on fortresses_torch.epd)
+* Check WDL probing preconditions and pass EP square (5.56 +- 4.39)
 * Various SIMD readability improvements (4.71 +- 4.46)
 * Separate legal_moves and moves_tried counters in search (3.64 +- 4.07)
 * Time management no longer uses max_time_per_move (2.44 +- 3.32)
@@ -28,6 +29,7 @@
 * Don't include the excluded move in legal_moves count (1.47 +- 3.01)
 * Time management no longer uses max_time_per_move (1.27 +- 3.44)
 * Replace repeated bounds logic with score_is_usable fn (1.23 +- 2.46)
+* Filter root moves when in tablebase positions at root (1.10 +- 2.28)
 * Only update PV in PV nodes (0.94 +- 2.69)
 * Histories are now updated in singular search (0.88 +- 2.70)
 * Null move scores are now verified (0.48 +- 2.39)
