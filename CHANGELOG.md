@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [14.0]
+
 * Network #25, trained with ~1bn additional 5ksn positions and a sparsity loss term (15.97 +- 7.05)
 * Implement NNZ inference and permute the network for sparsity (12.06 +- 5.91 STC)
 * Use the sum of all conthist scores as the base for updates (9.09 +- 5.17)
@@ -39,12 +41,10 @@
 * Don't apply tacthist bonus for quiet moves (-0.23 +- 2.25)
 * Post-LMR re-search no longer happens if we didn't actually reduce due to clamping (-0.36 +- 2.51)
 * Simplify killer moves (-0.81 +- 2.01)
-
 * Fixed Arc::get_mut crashes triggered by new behaviour in fastchess 1.8.2 (26.22 +- 10.02 against crashing version)
 
 #### Misc
 
-* To avoid time losses at TCEC (until a better fix can be made) PV extension in TB root positions is limited to 10 plies
 * We now prefetch transposition table entries on aarch64 (13.79 +- 6.45 VSTC)
 * hugepages are now used for the transposition table on Linux
 * All of the individual search files under search/ are merged into a search.rs
@@ -531,7 +531,8 @@ Initial release with the following major features:
     * Tapered midgame vs. endgame evaluation
     * Incremental updates
 
-[unreleased]: https://github.com/jgilchrist/chess-engine/compare/v13.0...HEAD
+[unreleased]: https://github.com/jgilchrist/chess-engine/compare/v14.0...HEAD
+[14.0]: https://github.com/jgilchrist/chess-engine/compare/v13.0..v14.0
 [13.0]: https://github.com/jgilchrist/chess-engine/compare/v12.0..v13.0
 [12.0]: https://github.com/jgilchrist/chess-engine/compare/v11.0..v12.0
 [11.0]: https://github.com/jgilchrist/chess-engine/compare/v10.0..v11.0
