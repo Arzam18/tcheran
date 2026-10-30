@@ -5,9 +5,12 @@
 #### Non-regression
 
 * Fix some issues with upcoming repetition detection (4.56 +- 4.34)
+* Use a linear formula for best move stability (-0.22 +- 2.04)
+* Introduce root moves array
 
 #### Misc
 
+* Implement 'go searchmoves'
 * Add 'set x y' as a shorthand for 'setoption name x value y'
 * Fix SAN ambiguity case when pieces do not share the same file or rank
 
