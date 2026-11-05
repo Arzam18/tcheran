@@ -34,7 +34,7 @@ use crate::{
         uci::{
             bench::bench,
             commands,
-            commands::UciCommand,
+            commands::{GoMoveRestrictionType, UciCommand},
             options::UciOption,
             parser,
             responses::{IdParam, UciReporter, UciResponse},
@@ -257,7 +257,7 @@ impl Uci {
                 };
 
                 for uci_mv in moves {
-                    let mv = uci_mv.find_in_game(&game);
+                    let mv = uci_mv.find_in_game(&game).expect("Illegal move");
                     game.make_move(mv);
                 }
 
@@ -266,7 +266,7 @@ impl Uci {
             }
             UciCommand::Go {
                 time_control,
-                searchmoves,
+                move_restriction,
             } => {
                 if self.threads.busy() {
                     self.reporter.generic_report("already searching");
@@ -276,22 +276,26 @@ impl Uci {
                 let mut root_moves = RootMoves::default_for(&self.game);
                 let mut root_tb_info = None;
 
-                if let Some(searchmoves) = searchmoves {
-                    let legal_moves = self.game.moves();
+                if let Some(move_restriction) = move_restriction {
                     let mut moves = MoveList::new();
 
                     // Check all of the moves are legal first
-                    for ucimove in searchmoves {
-                        let Some(matching_move) =
-                            legal_moves.find_matching(ucimove.from, ucimove.to, ucimove.promotion)
-                        else {
+                    for ucimove in &move_restriction.moves {
+                        let Some(matching_move) = ucimove.find_in_game(&self.game) else {
                             return Err("Illegal move".to_string());
                         };
 
                         moves.push(matching_move);
                     }
 
-                    root_moves.retain(|rm| moves.contains(rm.mv));
+                    match move_restriction.restriction {
+                        GoMoveRestrictionType::Search => {
+                            root_moves.retain(|rm| moves.contains(rm.mv));
+                        }
+                        GoMoveRestrictionType::Exclude => {
+                            root_moves.retain(|rm| !moves.contains(rm.mv));
+                        }
+                    }
                 }
 
                 if self.persistent_state.tablebase.can_probe(&self.game)
@@ -378,17 +382,7 @@ impl Uci {
                         }
 
                         if let Ok(uci_move) = parser::uci_move(mv) {
-                            let uci_move = game
-                                .moves()
-                                .into_iter()
-                                .find(|m| {
-                                    m.from() == uci_move.from
-                                        && m.to() == uci_move.to
-                                        && m.promotion() == uci_move.promotion
-                                })
-                                .copied();
-
-                            parsed_move = uci_move;
+                            parsed_move = uci_move.find_in_game(&game);
                         }
 
                         let Some(parsed_move) = parsed_move else {
@@ -643,7 +637,7 @@ pub enum UciInputMode {
 pub fn uci_options() -> Vec<UciOption> {
     let options = vec![
         UciOption::spin("Hash", |refs, value| {
-            refs.options.hash_size = value.as_usize();
+            refs.options.hash_size = value.into();
             refs.state
                 .tt
                 .resize(refs.options.hash_size, refs.options.threads);
@@ -653,7 +647,7 @@ pub fn uci_options() -> Vec<UciOption> {
         .build(),
         //
         UciOption::spin("Threads", |refs, value| {
-            refs.options.threads = value.as_usize();
+            refs.options.threads = value.into();
             refs.threads.scale(refs.options.threads);
         })
         .default(defaults::THREADS as i32)
@@ -680,7 +674,7 @@ pub fn uci_options() -> Vec<UciOption> {
         .build(),
         //
         UciOption::spin("MoveOverhead", |refs, value| {
-            refs.options.move_overhead = Duration::from_millis(value.as_u64());
+            refs.options.move_overhead = Duration::from_millis(value.into());
         })
         .default(defaults::MOVE_OVERHEAD.as_millis() as i32)
         .with_bounds(0, 1000)
@@ -697,7 +691,7 @@ pub fn uci_options() -> Vec<UciOption> {
             .build(),
         //
         UciOption::spin("SoftNodesHardFactor", |refs, value| {
-            let inner_value = value.as_usize();
+            let inner_value = value.into();
 
             let mut value = Some(inner_value);
             if inner_value == 0 {
