@@ -1,12 +1,12 @@
-name: Tcheran
+name: Tcheran Android ARM64
 
 on:
   workflow_dispatch:
     inputs:
       uci_date:
-        description: "Tcheran UCI version/date (example: 20260926)"
+        description: "Tcheran UCI version/date (YYYYMMDD)"
         required: true
-        default: "20261010"
+        default: "20261104"
         type: string
 
 permissions:
@@ -15,94 +15,141 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set UCI engine version
+      - name: Validate and set UCI engine version
         env:
           UCI_DATE: ${{ inputs.uci_date }}
         run: |
           python3 - <<'PY'
           import os
+          import re
           from pathlib import Path
 
           uci_date = os.environ["UCI_DATE"]
+          if not re.fullmatch(r"20[0-9]{6}", uci_date):
+              raise SystemExit("uci_date must be an eight-digit date beginning with 20")
 
           path = Path("engine/build.rs")
           text = path.read_text()
-
           old = 'let cargo_version = env!("CARGO_PKG_VERSION");'
           new = f'let cargo_version = "{uci_date}.0";'
-
-          if old not in text:
-              raise SystemExit(
-                  "ERROR: Could not find CARGO_PKG_VERSION line in engine/build.rs."
-              )
-
-          text = text.replace(old, new, 1)
-          path.write_text(text)
-
-          print(f"Modified file: {path}")
+          if text.count(old) != 1:
+              raise SystemExit("ERROR: Expected exactly one Cargo version line in engine/build.rs")
+          path.write_text(text.replace(old, new, 1))
           print(f"Tcheran UCI version: v{uci_date}")
           PY
 
-          echo "Modified version line:"
-          grep -n 'let cargo_version' engine/build.rs
+      - name: Install Rust Android target
+        run: rustup target add aarch64-linux-android
 
-      - name: Install Rust ARM64 Android target
+      - name: Install Android NDK r26d
         run: |
-          rustup target add aarch64-linux-android
-
-      - name: Install Android NDK
-        run: |
-          wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+          wget -q --tries=5 --timeout=30 https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
           unzip -q android-ndk-r26d-linux.zip
-          echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26d" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26d" >> "$GITHUB_ENV"
 
-      - name: Create clang and ar wrappers for Android target
+      - name: Configure Android NDK compiler wrappers
         run: |
-          mkdir -p $HOME/ndk-wrapper
-          cat > $HOME/ndk-wrapper/clang << 'EOF'
-          #!/bin/bash
+          mkdir -p "$HOME/ndk-wrapper"
+          cat > "$HOME/ndk-wrapper/aarch64-linux-android-clang" <<'EOF'
+          #!/usr/bin/env bash
           exec "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang" "$@"
           EOF
-          cat > $HOME/ndk-wrapper/aarch64-linux-android-clang << 'EOF'
-          #!/bin/bash
-          exec "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang" "$@"
-          EOF
-          cat > $HOME/ndk-wrapper/aarch64-linux-android-ar << 'EOF'
-          #!/bin/bash
+          cat > "$HOME/ndk-wrapper/aarch64-linux-android-ar" <<'EOF'
+          #!/usr/bin/env bash
           exec "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" "$@"
           EOF
-          chmod +x $HOME/ndk-wrapper/clang $HOME/ndk-wrapper/aarch64-linux-android-clang $HOME/ndk-wrapper/aarch64-linux-android-ar
-          echo "$HOME/ndk-wrapper" >> $GITHUB_PATH
+          chmod +x "$HOME/ndk-wrapper/aarch64-linux-android-clang" "$HOME/ndk-wrapper/aarch64-linux-android-ar"
+          echo "$HOME/ndk-wrapper" >> "$GITHUB_PATH"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang" >> "$GITHUB_ENV"
 
-      - name: Build
+      - name: Download and verify official Tcheran NNUE network
         env:
-          RUSTFLAGS: "-C target-feature=+neon,+dotprod"
+          GH_TOKEN: ${{ github.token }}
         run: |
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang"
-          which clang
-          which aarch64-linux-android-clang
-          which aarch64-linux-android-ar
-          cargo rustc --manifest-path ./engine/Cargo.toml --bin tcheran --release --target aarch64-linux-android -- --emit link=tcheran
+          set -euo pipefail
+          NETWORK_FILE="v25-fbb7eab6.nnue"
+          NETWORK_SHA256="fbb7eab600833c02363f2a6fcbcb0e1cef12389e507395381364d65bd59c430c"
+          NETWORK_DIR="$RUNNER_TEMP/tcheran-network"
+          mkdir -p "$NETWORK_DIR"
+          rm -f "$NETWORK_DIR/$NETWORK_FILE"
 
-      - name: List build output
+          # Prefer GitHub's release API client. Fall back to curl with retries
+          # because the engine build script's silent one-shot curl was fragile.
+          if ! gh release download networks \
+              --repo tcheran-chess/tcheran-networks \
+              --pattern "$NETWORK_FILE" \
+              --dir "$NETWORK_DIR"; then
+            rm -f "$NETWORK_DIR/$NETWORK_FILE"
+            curl --fail --show-error --location \
+              --retry 8 --retry-all-errors --retry-delay 3 \
+              --connect-timeout 30 --max-time 600 \
+              --output "$NETWORK_DIR/$NETWORK_FILE" \
+              "https://github.com/tcheran-chess/tcheran-networks/releases/download/networks/$NETWORK_FILE"
+          fi
+
+          test -s "$NETWORK_DIR/$NETWORK_FILE"
+          echo "$NETWORK_SHA256  $NETWORK_DIR/$NETWORK_FILE" | sha256sum --check --strict
+          echo "Tcheran network bytes: $(wc -c < "$NETWORK_DIR/$NETWORK_FILE")"
+          echo "EVALFILE=$NETWORK_DIR/$NETWORK_FILE" >> "$GITHUB_ENV"
+
+      - name: Run scalar-versus-Dotprod arithmetic tests
+        run: python3 scripts/test-dotprod-arithmetic.py
+
+      - name: Build ARM64 NEON baseline (Dotprod disabled)
+        env:
+          RUSTFLAGS: "-C target-cpu=generic -C target-feature=+neon,-dotprod"
         run: |
-          find . -maxdepth 1 -type f -executable
+          set -euo pipefail
+          export CC_aarch64_linux_android="$HOME/ndk-wrapper/aarch64-linux-android-clang"
+          export AR_aarch64_linux_android="$HOME/ndk-wrapper/aarch64-linux-android-ar"
+          CARGO_TARGET_DIR=target/android-neon \
+            cargo build --locked --manifest-path engine/Cargo.toml \
+              --package engine --bin tcheran --release --target aarch64-linux-android
+          mkdir -p dist
+          cp target/android-neon/aarch64-linux-android/release/tcheran \
+            dist/tcheran-android-arm64-neon
 
-      - name: Upload artifact
+      - name: Build ARM64 Dotprod (UDOT enabled)
+        env:
+          RUSTFLAGS: "-C target-cpu=generic -C target-feature=+neon,+dotprod"
+        run: |
+          set -euo pipefail
+          export CC_aarch64_linux_android="$HOME/ndk-wrapper/aarch64-linux-android-clang"
+          export AR_aarch64_linux_android="$HOME/ndk-wrapper/aarch64-linux-android-ar"
+          CARGO_TARGET_DIR=target/android-dotprod \
+            cargo build --locked --manifest-path engine/Cargo.toml \
+              --package engine --bin tcheran --release --target aarch64-linux-android
+          mkdir -p dist
+          cp target/android-dotprod/aarch64-linux-android/release/tcheran \
+            dist/tcheran-android-arm64-dotprod
+
+      - name: Verify AArch64 ELF and generated SIMD instructions
+        run: |
+          OBJDUMP="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"
+          "$OBJDUMP" -f dist/tcheran-android-arm64-neon
+          "$OBJDUMP" -f dist/tcheran-android-arm64-dotprod
+          scripts/verify-android-simd.sh \
+            dist/tcheran-android-arm64-neon \
+            dist/tcheran-android-arm64-dotprod \
+            "$OBJDUMP"
+
+      - name: Upload Android ARM64 builds
         uses: actions/upload-artifact@v4
         with:
-          name: tcheran-android-arm64
-          path: tcheran
+          name: tcheran-android-arm64-neon-dotprod
+          path: dist/tcheran-android-arm64-*
+          if-no-files-found: error
 
       - name: Create prerelease
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-build-${{ github.run_number }}
-          name: Tcheran Build ${{ github.run_number }}
+          name: Tcheran Android Build ${{ github.run_number }}
           prerelease: true
-          files: tcheran
+          files: dist/tcheran-android-arm64-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
