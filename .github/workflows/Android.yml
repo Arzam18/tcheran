@@ -132,7 +132,7 @@ jobs:
           OBJDUMP="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"
           "$OBJDUMP" -f dist/tcheran-android-arm64-neon
           "$OBJDUMP" -f dist/tcheran-android-arm64-dotprod
-          scripts/verify-android-simd.sh \
+          bash scripts/verify-android-simd.sh \
             dist/tcheran-android-arm64-neon \
             dist/tcheran-android-arm64-dotprod \
             "$OBJDUMP"
