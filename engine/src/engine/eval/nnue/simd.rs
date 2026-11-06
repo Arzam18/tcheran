@@ -59,10 +59,11 @@ pub type I32s = simd!(
     neon { int32x4_t }
 );
 
+// Unsigned activation bytes used by the first NNUE layer's u8 x i8 dot product.
 pub type UI8s = simd!(
     avx2 { __m256i }
     avx512 { __m512i }
-    neon { int8x16_t }
+    neon { uint8x16_t }
 );
 
 pub const I8_LANES: usize = size_of::<I8s>() / size_of::<i8>();
@@ -298,7 +299,7 @@ pub unsafe fn reinterpret_i32_as_u8s(n: *const i32) -> UI8s {
     simd!(
         avx2 { _mm256_set1_epi32(*n) }
         avx512 { _mm512_set1_epi32(*n) }
-        neon { vreinterpretq_s8_s32(vdupq_n_s32(*n)) }
+        neon { vreinterpretq_u8_s32(vdupq_n_s32(*n)) }
     )
 }
 
@@ -327,7 +328,7 @@ pub unsafe fn sum_i32s(n: I32s) -> i32 {
 
 #[inline(always)]
 #[allow(unused, reason = "Only used on some platforms")]
-pub unsafe fn dpbusd(acc: I32s, u8s: UI8s, i8s: UI8s) -> I32s {
+pub unsafe fn dpbusd(acc: I32s, u8s: UI8s, i8s: I8s) -> I32s {
     simd!(
         avx2 {{
             let products = _mm256_maddubs_epi16(u8s, i8s);
@@ -348,12 +349,44 @@ pub unsafe fn dpbusd(acc: I32s, u8s: UI8s, i8s: UI8s) -> I32s {
         }
         neon {
             cfg_select! {
-                target_feature = "dotprod" => vdotq_s32(acc, u8s, i8s),
+                // UDOT accepts unsigned x unsigned bytes. Bias each signed weight
+                // by +128, then subtract 128 * sum(activations) from each 4-byte
+                // dot-product lane. This exactly implements the required u8 x i8
+                // operation without quantizing or changing the network weights.
+                target_feature = "dotprod" => {{
+                    let biased_weights = veorq_u8(
+                        vreinterpretq_u8_s8(i8s),
+                        vdupq_n_u8(0x80),
+                    );
+                    let dotted = vdotq_u32(vreinterpretq_u32_s32(acc), u8s, biased_weights);
+                    let pair_sums = vpaddlq_u8(u8s);
+                    let group_sums = vpaddlq_u16(pair_sums);
+                    let correction = vshlq_n_u32::<7>(group_sums);
+                    vreinterpretq_s32_u32(vsubq_u32(dotted, correction))
+                }}
+                // Baseline NEON: reinterpret u8 as i8, then add 256*w for
+                // every activation whose high bit was set. Widen before the
+                // correction so all intermediate sums remain exact.
                 _ => {{
-                    let lo = vmull_s8(vget_low_s8(u8s), vget_low_s8(i8s));
-                    let hi = vmull_high_s8(u8s, i8s);
-                    let pairwise = vpaddq_s16(lo, hi);
-                    vpadalq_s16(acc, pairwise)
+                    let signed_activations = vreinterpretq_s8_u8(u8s);
+                    let high_bit_mask = vreinterpretq_s8_u8(vshrq_n_u8::<7>(u8s));
+
+                    let products_lo = vmull_s8(
+                        vget_low_s8(signed_activations),
+                        vget_low_s8(i8s),
+                    );
+                    let products_hi = vmull_high_s8(signed_activations, i8s);
+                    let product_pairs = vpaddq_s16(products_lo, products_hi);
+                    let base = vpadalq_s16(acc, product_pairs);
+
+                    let correction_lo = vmull_s8(
+                        vget_low_s8(high_bit_mask),
+                        vget_low_s8(i8s),
+                    );
+                    let correction_hi = vmull_high_s8(high_bit_mask, i8s);
+                    let correction_pairs = vpaddq_s16(correction_lo, correction_hi);
+                    let correction = vpadalq_s16(vdupq_n_s32(0), correction_pairs);
+                    vaddq_s32(base, vshlq_n_s32::<8>(correction))
                 }}
             }
         }
@@ -361,7 +394,7 @@ pub unsafe fn dpbusd(acc: I32s, u8s: UI8s, i8s: UI8s) -> I32s {
 }
 
 #[inline(always)]
-pub unsafe fn dpbusdx2(acc: I32s, u8s1: UI8s, i8s1: UI8s, u8s2: UI8s, i8s2: UI8s) -> I32s {
+pub unsafe fn dpbusdx2(acc: I32s, u8s1: UI8s, i8s1: I8s, u8s2: UI8s, i8s2: I8s) -> I32s {
     simd!(
         avx2 {{
             let p1 = _mm256_maddubs_epi16(u8s1, i8s1);
@@ -378,22 +411,9 @@ pub unsafe fn dpbusdx2(acc: I32s, u8s1: UI8s, i8s1: UI8s, u8s2: UI8s, i8s2: UI8s
             _mm512_add_epi32(acc, _mm512_madd_epi16(combined, ones))
         }}
         neon {{
-            cfg_select! {
-                target_feature = "dotprod" => {
-                    dpbusd(dpbusd(acc, u8s1, i8s1), u8s2, i8s2)
-                }
-                _ => {
-                    let lo1 = vmull_s8(vget_low_s8(u8s1), vget_low_s8(i8s1));
-                    let hi1 = vmull_high_s8(u8s1, i8s1);
-                    let p1 = vpaddq_s16(lo1, hi1);
-
-                    let lo2 = vmull_s8(vget_low_s8(u8s2), vget_low_s8(i8s2));
-                    let hi2 = vmull_high_s8(u8s2, i8s2);
-                    let p2 = vpaddq_s16(lo2, hi2);
-
-                    vpadalq_s16(acc, vaddq_s16(p1, p2))
-                }
-            }
+            // Keep the two widened accumulations separate. This avoids
+            // combining partial sums in 16-bit lanes before widening.
+            dpbusd(dpbusd(acc, u8s1, i8s1), u8s2, i8s2)
         }}
     )
 }
