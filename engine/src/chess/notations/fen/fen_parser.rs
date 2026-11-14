@@ -1,5 +1,5 @@
 use crate::{
-    chess::{CastleRights, prelude::*, ranks::back_rank, squares},
+    chess::{CastleRights, game::IllegalPositionReason, prelude::*, ranks::back_rank, squares},
     engine::util::chars::StrParsingExtensions,
 };
 
@@ -14,6 +14,7 @@ pub enum ParseError {
     InvalidEnPassantTarget,
     InvalidHalfmoveClock,
     InvalidFullmoveNumber,
+    IllegalPosition(IllegalPositionReason),
 }
 
 impl std::fmt::Display for ParseError {
@@ -25,6 +26,17 @@ impl std::fmt::Display for ParseError {
             Self::InvalidEnPassantTarget => write!(f, "Invalid en passant target"),
             Self::InvalidHalfmoveClock => write!(f, "Invalid halfmove clock"),
             Self::InvalidFullmoveNumber => write!(f, "Invalid fullmove number"),
+            Self::IllegalPosition(reason) => {
+                write!(
+                    f,
+                    "Illegal position: {}",
+                    match reason {
+                        IllegalPositionReason::IncorrectNumberOfKings =>
+                            "Incorrect number of kings",
+                        IllegalPositionReason::CanCaptureKing => "King can be captured",
+                    }
+                )
+            }
         }
     }
 }
@@ -85,7 +97,17 @@ fn fen_position(input: &str) -> Result<Board, ()> {
         all_pieces[i * File::N..(i + 1) * File::N].copy_from_slice(&rank.0);
     }
 
-    all_pieces.try_into()
+    let mut board = Board::EMPTY;
+
+    for (i, maybe_piece) in all_pieces.into_iter().enumerate() {
+        let Some(piece) = maybe_piece else {
+            continue;
+        };
+
+        board.set_at(Square::from_index(i), piece);
+    }
+
+    Ok(board)
 }
 
 fn fen_color(input: &str) -> Result<Player, ()> {
@@ -295,7 +317,7 @@ pub fn parse(input: &str, frc: bool) -> Result<Game, ParseError> {
 
     let plies = plies_from_fullmove_number(fullmove_number, player);
 
-    Ok(Game::from_state(
+    let game = Game::from_state(
         board,
         player,
         castle_rights,
@@ -303,7 +325,13 @@ pub fn parse(input: &str, frc: bool) -> Result<Game, ParseError> {
         halfmove_clock,
         plies,
         frc,
-    ))
+    );
+
+    if let Err(reason) = game.check_legality() {
+        return Err(ParseError::IllegalPosition(reason));
+    }
+
+    Ok(game)
 }
 
 #[cfg(test)]
