@@ -110,6 +110,7 @@ parameters!(
     non_pawn_correction_history_weight: i32 = 88 [48..256];
     threat_correction_history_weight: i32 = 149 [48..256];
     one_ply_contcorrhist_weight: i32 = 150 [48..256];
+    two_ply_contcorrhist_weight: i32 = 150 [48..256];
 
     // Time Management
     default_moves_to_go: u32 = 20 [8..32];
@@ -121,6 +122,11 @@ parameters!(
     best_move_tm_base: u32 = 2016 [10..5120];
     best_move_tm_multiplier: u32 = 500 [10..5120];
     best_move_tm_min: u32 = 750 [10..1000];
+
+    score_stability_diff: i32 = 40 [10..50];
+    score_stability_tm_base: u32 = 1146 [10..5120];
+    score_stability_tm_multiplier: u32 = 45 [10..5120];
+    score_stability_tm_min: u32 = 850 [10..1000];
 
     node_tm_base: u32 = 2630 [10..5120];
     node_tm_multiplier: u32 = 1700 [10..5120];
