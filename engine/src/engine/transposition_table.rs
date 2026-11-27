@@ -185,19 +185,10 @@ impl TranspositionTable {
         let ptr = {
             cfg_select! {
                 target_os = "linux" => {
-                    use libc::{
-                        MADV_HUGEPAGE, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE, madvise,
-                        mmap,
-                    };
+                    use libc::{MADV_HUGEPAGE, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE, madvise, mmap};
 
-                    let ptr = mmap(
-                        std::ptr::null_mut(),
-                        size,
-                        PROT_READ | PROT_WRITE,
-                        MAP_PRIVATE | MAP_ANONYMOUS,
-                        -1,
-                        0,
-                    );
+                    let ptr =
+                        mmap(std::ptr::null_mut(), size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
                     madvise(ptr, size, MADV_HUGEPAGE);
                     ptr.cast()
@@ -226,8 +217,7 @@ impl TranspositionTable {
                 let _ = libc::munmap(data.cast(), size);
             }
             _ => {
-                let layout =
-                    std::alloc::Layout::from_size_align(size, align_of::<Cluster>()).unwrap();
+                let layout = std::alloc::Layout::from_size_align(size, align_of::<Cluster>()).unwrap();
                 unsafe { std::alloc::dealloc(data.cast(), layout) };
             }
         }
@@ -350,7 +340,7 @@ impl TranspositionTable {
         eval
     }
 
-    pub fn insert(
+    fn insert_entry(
         &self,
         key: ZobristHash,
         bound: NodeBound,
@@ -406,12 +396,28 @@ impl TranspositionTable {
             new_entry.best_move = lve.best_move;
         }
 
-        if least_valuable_entry.is_none()
-            || Self::should_overwrite(least_valuable_entry.unwrap(), &new_entry)
-        {
+        if least_valuable_entry.is_none() || Self::should_overwrite(least_valuable_entry.unwrap(), &new_entry) {
             cluster.entries[least_valuable_entry_idx] = new_entry;
             raw_cluster.write(cluster);
         }
+    }
+
+    pub fn insert(
+        &self,
+        key: ZobristHash,
+        bound: NodeBound,
+        best_move: Option<Move>,
+        score: Eval,
+        eval: Eval,
+        depth: Depth,
+        plies: u8,
+        was_pv: bool,
+    ) {
+        self.insert_entry(key, bound, best_move, score, eval, depth, plies, was_pv);
+    }
+
+    pub fn insert_eval(&self, key: ZobristHash, eval: Eval, was_pv: bool) {
+        self.insert_entry(key, NodeBound::None, None, Eval::NONE, eval, Depth::ZERO, 0, was_pv);
     }
 
     pub fn get(&self, key: ZobristHash, plies: u8) -> Option<TranspositionTableHit> {
@@ -453,10 +459,7 @@ impl TranspositionTable {
             target_arch = "aarch64" => {
                 let idx = self.get_cluster_idx(hash);
 
-                #[expect(
-                    clippy::pointers_in_nomem_asm_block,
-                    reason = "Pointer is not read/written"
-                )]
+                #[expect(clippy::pointers_in_nomem_asm_block, reason = "Pointer is not read/written")]
                 unsafe {
                     let ptr: *const RawCluster = self.data.load(Ordering::Relaxed).add(idx).cast();
 
