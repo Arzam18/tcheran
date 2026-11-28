@@ -3,6 +3,7 @@
 
 use crate::engine::eval::nnue::network;
 
+#[rustfmt::skip]
 macro_rules! simd {
     (
         avx2 $avx2block:tt
@@ -418,6 +419,7 @@ pub unsafe fn dpbusdx2(acc: I32s, u8s1: UI8s, i8s1: I8s, u8s2: UI8s, i8s2: I8s) 
     )
 }
 
+#[rustfmt::skip]
 macro_rules! nnz_table {
     () => {
         static NNZ_TABLE: [[i16; 8]; 256] = {

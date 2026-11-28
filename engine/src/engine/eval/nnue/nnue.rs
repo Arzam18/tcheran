@@ -4,8 +4,9 @@ use crate::{
         eval::{
             Eval,
             nnue::{
+                cache::AccumulatorCache,
                 inference,
-                network::{BUCKET_LAYOUT, INPUT_BUCKETS, L1, Network, OUTPUT_BUCKETS},
+                network::{BUCKET_LAYOUT, L1, Network, OUTPUT_BUCKETS},
             },
         },
         search::MAX_PLIES_ARRAY_SIZE,
@@ -15,6 +16,11 @@ use crate::{
 
 pub static NETWORK: Network = unsafe { std::mem::transmute(*include_bytes!(env!("NETWORK"))) };
 
+/// A column of the feature-weights matrix.
+#[derive(Clone)]
+#[repr(C, align(64))]
+pub struct Accumulator(pub [i16; L1]);
+
 fn input_bucket(king: Square, pov: Player) -> usize {
     BUCKET_LAYOUT[king
         .relative_for(pov)
@@ -22,119 +28,29 @@ fn input_bucket(king: Square, pov: Player) -> usize {
         .idx()]
 }
 
+fn output_bucket(game: &Game) -> usize {
+    let divisor = 32usize.div_ceil(OUTPUT_BUCKETS);
+    (game.board.occupancy().count() as usize - 2) / divisor
+}
+
 #[inline]
-fn should_mirror(king: Square) -> bool {
+pub fn should_mirror(king: Square) -> bool {
     king.file() >= File::E
 }
 
-#[derive(Debug, Clone)]
-pub struct NNUEChanges {
-    pub adds: ArrayVec<NNUEChange, 2>,
-    pub subs: ArrayVec<NNUEChange, 2>,
-    pub mv: Move,
-    pub moved_piece: Piece,
-}
-
-impl MoveObserver for NNUEChanges {
-    fn init(&mut self, moved_piece: Piece, mv: Move) {
-        self.moved_piece = moved_piece;
-        self.mv = mv;
-    }
-
-    fn set(&mut self, sq: Square, piece: Piece) {
-        self.adds.push(NNUEChange::new(sq, piece));
-    }
-
-    fn remove(&mut self, sq: Square, piece: Piece) {
-        self.subs.push(NNUEChange::new(sq, piece));
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct NNUEChange {
-    pub piece: Piece,
-    pub square: Square,
-}
-
-impl NNUEChanges {
-    pub fn uninit() -> Self {
-        Self {
-            adds: ArrayVec::new(),
-            subs: ArrayVec::new(),
-
-            // Values chosen arbitrarily since they will always be overwritten
-            mv: Move::quiet(H8, H8),
-            moved_piece: Piece::WHITE_PAWN,
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.adds.clear();
-        self.subs.clear();
-
-        self.mv = Move::quiet(H8, H8);
-        self.moved_piece = Piece::WHITE_PAWN;
-    }
-}
-
-impl NNUEChange {
-    pub fn new(square: Square, piece: Piece) -> Self {
-        Self { piece, square }
-    }
-}
-
-// [pov][mirrored][bucket]
-pub struct AccumulatorCache([[[CacheEntry; INPUT_BUCKETS]; 2]; Player::N]);
-
-impl AccumulatorCache {
-    pub fn new() -> Box<Self> {
-        let mut cache = unsafe { Box::<Self>::new_zeroed().assume_init() };
-
-        for pov in 0..Player::N {
-            for side in 0..2 {
-                for bucket in 0..INPUT_BUCKETS {
-                    cache.0[pov][side][bucket] = CacheEntry::new();
-                }
-            }
-        }
-        cache
-    }
-}
-
-pub struct NetworkStack {
+pub struct NNUE {
     stack: Vec<NetworkStackEntry>,
     current_idx: usize,
 
     cache: Box<AccumulatorCache>,
 }
 
-#[derive(Clone)]
-pub struct NetworkStackEntry {
-    pub network: NNUE,
-    changes: NNUEChanges,
-    correct: [bool; Player::N],
-}
-
-pub struct CacheEntry {
-    value: Accumulator,
-    board: Board,
-}
-
-impl CacheEntry {
-    fn new() -> Self {
-        Self {
-            value: Accumulator(NETWORK.l0_biases),
-            board: Board::EMPTY,
-        }
-    }
-}
-
-impl NetworkStack {
+impl NNUE {
     pub fn new() -> Self {
         Self {
             stack: vec![
                 NetworkStackEntry {
-                    network: NNUE::default(),
+                    accumulators: [Accumulator(NETWORK.l0_biases), Accumulator(NETWORK.l0_biases)],
                     changes: NNUEChanges::uninit(),
                     correct: [false; Player::N],
                 };
@@ -148,7 +64,7 @@ impl NetworkStack {
 
     pub fn setup(&mut self, board: &Board) {
         for pov in Player::ALL {
-            self.stack[0].network.refresh(board, pov, &mut self.cache);
+            self.stack[0].refresh(board, pov, &mut self.cache);
             self.stack[0].correct[pov] = true;
         }
 
@@ -187,14 +103,17 @@ impl NetworkStack {
                 self.update(i, game, pov);
             } else {
                 let current_entry = &mut self.stack[self.current_idx];
-                current_entry.network.refresh(&game.board, pov, &mut self.cache);
+                current_entry.refresh(&game.board, pov, &mut self.cache);
                 current_entry.correct[pov] = true;
             }
         }
 
         // We should now have a full stack of materialised accumulators, all the way up to our current one
         // so we can evaluate that.
-        self.current_entry().network.evaluate(game.player, game)
+        let current_entry = self.current_entry();
+        let (us, them) = (&current_entry.accumulators[game.player], &current_entry.accumulators[!game.player]);
+        let output = inference::forward(us, them, output_bucket(game));
+        Eval(output)
     }
 
     fn last_good_efficient_update_index(&self, pov: Player) -> Option<usize> {
@@ -236,87 +155,69 @@ impl NetworkStack {
 
         for i in last_good_idx..self.current_idx {
             if let (prev, [entry, ..]) = self.stack.split_at_mut(i + 1) {
-                Self::update_accumulator(entry, &prev[i], king, pov);
+                entry.update(&prev[i], king, pov);
             }
 
             self.stack[i].correct[pov] = true;
         }
     }
+}
 
-    fn update_accumulator(
-        entry: &mut NetworkStackEntry,
-        previous_entry: &NetworkStackEntry,
-        king: Square,
-        pov: Player,
-    ) {
-        match (entry.changes.adds.as_slice(), entry.changes.subs.as_slice()) {
-            ([add1], [sub1]) => {
-                let bucket = input_bucket(king, pov);
-                let add1 = nnue_index(add1.piece, add1.square, king, pov);
-                let sub1 = nnue_index(sub1.piece, sub1.square, king, pov);
-                NNUE::add1_sub1(&previous_entry.network[pov], &mut entry.network[pov], bucket, add1, sub1);
-            }
-            ([add1], [sub1, sub2]) => {
-                let bucket = input_bucket(king, pov);
-                let add1 = nnue_index(add1.piece, add1.square, king, pov);
-                let sub1 = nnue_index(sub1.piece, sub1.square, king, pov);
-                let sub2 = nnue_index(sub2.piece, sub2.square, king, pov);
+#[derive(Debug, Clone)]
+pub struct NNUEChanges {
+    pub adds: ArrayVec<(Piece, Square), 2>,
+    pub subs: ArrayVec<(Piece, Square), 2>,
+    pub mv: Move,
+    pub moved_piece: Piece,
+}
 
-                NNUE::add1_sub2(&previous_entry.network[pov], &mut entry.network[pov], bucket, add1, sub1, sub2);
-            }
-            ([add1, add2], [sub1, sub2]) => {
-                let bucket = input_bucket(king, pov);
-                let add1 = nnue_index(add1.piece, add1.square, king, pov);
-                let add2 = nnue_index(add2.piece, add2.square, king, pov);
-                let sub1 = nnue_index(sub1.piece, sub1.square, king, pov);
-                let sub2 = nnue_index(sub2.piece, sub2.square, king, pov);
+impl MoveObserver for NNUEChanges {
+    fn init(&mut self, moved_piece: Piece, mv: Move) {
+        self.moved_piece = moved_piece;
+        self.mv = mv;
+    }
 
-                NNUE::add2_sub2(&previous_entry.network[pov], &mut entry.network[pov], bucket, add1, add2, sub1, sub2);
-            }
-            (_, _) => unreachable!(),
-        }
+    fn set(&mut self, sq: Square, piece: Piece) {
+        self.adds.push((piece, sq));
+    }
+
+    fn remove(&mut self, sq: Square, piece: Piece) {
+        self.subs.push((piece, sq));
     }
 }
 
-/// A column of the feature-weights matrix.
-#[derive(Clone)]
-#[repr(C, align(64))]
-pub struct Accumulator(pub [i16; L1]);
-
-#[derive(Clone)]
-pub struct NNUE {
-    accumulators: [Accumulator; Player::N],
-}
-
-impl Default for NNUE {
-    fn default() -> Self {
+impl NNUEChanges {
+    pub fn uninit() -> Self {
         Self {
-            accumulators: [Accumulator(NETWORK.l0_biases), Accumulator(NETWORK.l0_biases)],
+            adds: ArrayVec::new(),
+            subs: ArrayVec::new(),
+
+            // Values chosen arbitrarily since they will always be overwritten
+            mv: Move::quiet(H8, H8),
+            moved_piece: Piece::WHITE_PAWN,
         }
     }
-}
 
-impl std::ops::Index<Player> for NNUE {
-    type Output = Accumulator;
+    pub fn clear(&mut self) {
+        self.adds.clear();
+        self.subs.clear();
 
-    fn index(&self, index: Player) -> &Self::Output {
-        &self.accumulators[index as usize]
+        self.mv = Move::quiet(H8, H8);
+        self.moved_piece = Piece::WHITE_PAWN;
     }
 }
 
-impl std::ops::IndexMut<Player> for NNUE {
-    fn index_mut(&mut self, index: Player) -> &mut Self::Output {
-        &mut self.accumulators[index as usize]
-    }
+#[derive(Clone)]
+pub struct NetworkStackEntry {
+    pub accumulators: [Accumulator; Player::N],
+    changes: NNUEChanges,
+    correct: [bool; Player::N],
 }
 
-impl NNUE {
-    pub fn refresh(&mut self, board: &Board, pov: Player, cache: &mut AccumulatorCache) {
+impl NetworkStackEntry {
+    fn refresh(&mut self, board: &Board, pov: Player, cache: &mut AccumulatorCache) {
         let king = board.king_square(pov);
-        let king_side = usize::from(should_mirror(king));
-        let king_bucket = BUCKET_LAYOUT[king.relative_for(pov)];
-
-        let cache_entry = &mut cache.0[pov][king_side][king_bucket];
+        let cache_entry = cache.get(pov, king);
 
         let mut adds = ArrayVec::<_, 32>::new();
         let mut subs = ArrayVec::<_, 32>::new();
@@ -332,11 +233,11 @@ impl NNUE {
                 let piece = Piece::new(player, piece);
 
                 for square in to_add {
-                    adds.push(nnue_index(piece, square, king, pov));
+                    adds.push(nnue_index((piece, square), king, pov));
                 }
 
                 for square in to_sub {
-                    subs.push(nnue_index(piece, square, king, pov));
+                    subs.push(nnue_index((piece, square), king, pov));
                 }
             }
         }
@@ -354,6 +255,33 @@ impl NNUE {
         cache_entry.board = board.clone();
 
         self.accumulators[pov] = cache_entry.value.clone();
+    }
+
+    fn update(&mut self, prev: &Self, king: Square, pov: Player) {
+        match (self.changes.adds.as_slice(), self.changes.subs.as_slice()) {
+            (&[add1], &[sub1]) => {
+                let bucket = input_bucket(king, pov);
+                let add1 = nnue_index(add1, king, pov);
+                let sub1 = nnue_index(sub1, king, pov);
+                Self::add1_sub1(&prev.accumulators[pov], &mut self.accumulators[pov], bucket, add1, sub1);
+            }
+            (&[add1], &[sub1, sub2]) => {
+                let bucket = input_bucket(king, pov);
+                let add1 = nnue_index(add1, king, pov);
+                let sub1 = nnue_index(sub1, king, pov);
+                let sub2 = nnue_index(sub2, king, pov);
+                Self::add1_sub2(&prev.accumulators[pov], &mut self.accumulators[pov], bucket, add1, sub1, sub2);
+            }
+            (&[add1, add2], &[sub1, sub2]) => {
+                let bucket = input_bucket(king, pov);
+                let add1 = nnue_index(add1, king, pov);
+                let add2 = nnue_index(add2, king, pov);
+                let sub1 = nnue_index(sub1, king, pov);
+                let sub2 = nnue_index(sub2, king, pov);
+                Self::add2_sub2(&prev.accumulators[pov], &mut self.accumulators[pov], bucket, add1, add2, sub1, sub2);
+            }
+            (_, _) => unreachable!(),
+        }
     }
 
     fn add1(acc: &mut Accumulator, bucket: usize, add1: usize) {
@@ -416,45 +344,9 @@ impl NNUE {
             acc.0[i] = previous_acc.0[i] + add1_features[i] + add2_features[i] - sub1_features[i] - sub2_features[i];
         }
     }
-
-    fn bucket(game: &Game) -> usize {
-        let divisor = 32usize.div_ceil(OUTPUT_BUCKETS);
-        (game.board.occupancy().count() as usize - 2) / divisor
-    }
-
-    pub fn evaluate(&self, player: Player, game: &Game) -> Eval {
-        let (us, them) = (&self[player], &self[player.other()]);
-        let output_bucket = Self::bucket(game);
-        let output = inference::forward(us, them, output_bucket);
-        Eval(output)
-    }
-
-    pub fn approx_contribution(&mut self, game: &Game, square: Square, player: Player) -> Eval {
-        let eval = self.evaluate(player, game);
-
-        let piece = game.board.piece_guaranteed_at(square);
-
-        // Remove this feature from the accumulator to see what the eval looks like without it
-        for pov in Player::ALL {
-            let king = game.board.king_square(pov);
-            let bucket = input_bucket(king, pov);
-            Self::sub1(&mut self[pov], bucket, nnue_index(piece, square, king, pov));
-        }
-
-        let eval_without_feature = self.evaluate(player, game);
-
-        // Add the feature back again
-        for pov in Player::ALL {
-            let king = game.board.king_square(pov);
-            let bucket = input_bucket(king, pov);
-            Self::add1(&mut self[pov], bucket, nnue_index(piece, square, king, pov));
-        }
-
-        eval - eval_without_feature
-    }
 }
 
-fn nnue_index(piece: Piece, sq: Square, king: Square, pov: Player) -> usize {
+fn nnue_index((piece, sq): (Piece, Square), king: Square, pov: Player) -> usize {
     const COLOR_STRIDE: usize = Square::N * PieceKind::N;
     const PIECE_STRIDE: usize = Square::N;
 

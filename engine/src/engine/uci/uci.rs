@@ -21,11 +21,7 @@ use crate::{
         prelude::*,
     },
     engine::{
-        eval::{
-            WhiteEval,
-            nnue::{AccumulatorCache, NNUE},
-            wdl,
-        },
+        eval::{Eval, nnue::NNUE, wdl},
         options::{EngineOptions, defaults},
         search::{
             NullReporter, PersistentState, Reporter, RootMoves, RootTbInfo, ThreadData, TimeControl, search,
@@ -423,25 +419,27 @@ impl Uci {
                 println!();
             }
             UciCommand::Eval => {
-                let mut nnue = NNUE::default();
-                let mut cache = AccumulatorCache::new();
+                let mut nnue = NNUE::new();
+                nnue.setup(&self.game.board);
+                let eval = nnue.evaluate(&self.game);
 
-                for player in Player::ALL {
-                    nnue.refresh(&self.game.board, player, &mut cache);
-                }
-
-                let mut piece_contributions: [WhiteEval; Square::N] = [WhiteEval(0); Square::N];
+                let mut piece_contributions: [Option<Eval>; Square::N] = [None; Square::N];
                 for sq in Bitboard::FULL {
                     let Some(piece) = self.game.board.piece_at(sq) else {
                         continue;
                     };
+
                     if piece.kind == King {
                         continue;
                     }
 
-                    piece_contributions[sq] = nnue
-                        .approx_contribution(&self.game.clone(), sq, White)
-                        .to_white_eval(White);
+                    let mut nnue = NNUE::new();
+                    let mut without_piece = self.game.clone();
+                    without_piece.board.remove_at(sq);
+                    nnue.setup(&without_piece.board);
+                    let eval_without_piece = nnue.evaluate(&without_piece);
+
+                    piece_contributions[sq] = Some(eval - eval_without_piece);
                 }
 
                 println!("┌───────┬───────┬───────┬───────┬───────┬───────┬───────┬───────┐");
@@ -467,17 +465,14 @@ impl Uci {
 
                     for file in File::ALL {
                         let sq = Square::from_file_and_rank(file, *rank);
-                        let piece = self.game.board.piece_at(sq);
 
-                        match piece {
-                            Some(piece) if piece.kind != King => {
-                                let normalized_contribution =
-                                    wdl::normalize(piece_contributions[sq].for_player(White), &self.game.board)
-                                        .to_white_eval(White);
+                        if let Some(contribution) = piece_contributions[sq] {
+                            let normalized_contribution =
+                                wdl::normalize(contribution, &self.game.board).to_white_eval(self.game.player);
 
-                                print!("{: ^7}", normalized_contribution.to_string());
-                            }
-                            _ => print!("       "),
+                            print!("{: ^7}", normalized_contribution.to_string());
+                        } else {
+                            print!("       ");
                         }
 
                         print!("│");
@@ -492,11 +487,11 @@ impl Uci {
                     }
                 }
 
-                let raw_eval = nnue.evaluate(White, &self.game);
-                let normalised_eval = wdl::normalize(raw_eval, &self.game.board).to_white_eval(White);
+                let raw_eval = nnue.evaluate(&self.game);
+                let normalised_eval = wdl::normalize(raw_eval, &self.game.board).to_white_eval(self.game.player);
 
                 println!();
-                println!("Raw evaluation: {}", raw_eval.to_white_eval(White));
+                println!("Raw evaluation: {}", raw_eval.to_white_eval(self.game.player));
                 println!("Normalised evaluation: {normalised_eval}");
                 println!();
             }
